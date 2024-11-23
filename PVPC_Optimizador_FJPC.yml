@@ -1,0 +1,127 @@
+blueprint:
+  author: fjporras
+  domain: automation
+  homeassistant:
+    min_version: 2024.11.22
+  name: 'PVPC Optimizador FJPC v3: Enciende dispositivos en base a los precios horarios con control de temperatura'
+  description: "This blueprint automates device control based on the PVPC electricity pricing in Spain and also includes temperature control for Shelly devices. It prevents the device from overheating by turning it off if the temperature exceeds a defined threshold, and allows the device to turn back on once the temperature cools down to a safe level."
+  input:
+    pvpc_sensor:
+      name: PVPC sensor
+      description: REQUIRED. Sensor created using the PVPC integration.
+      selector:
+        entity:
+          filter:
+          - integration: pvpc_hourly_pricing
+          multiple: false
+    hours:
+      name: Cuantas horas?
+      description: REQUERIDO. Numero de horas al día en las que quieres encender los dispositivos.
+      selector:
+        number:
+          min: 1.0
+          max: 24.0
+          step: 1.0
+          unit_of_measurement: h
+          mode: slider
+    tariff:
+      name: Cuando encender los dispositivos?
+      description: Elige si quieres encender tu dispositivo durante los horarios
+        más baratos o más caros del día.
+      default: Durante las horas mas baratas
+      selector:
+        select:
+          options:
+          - Durante las horas mas baratas
+          - Durante las horas mas caras
+          multiple: false
+          sort: false
+          custom_value: false
+    device:
+      name: Dispositivos a controlar
+      icon: mdi:target
+      selector:
+        target: {}
+    turn_on_boolean:
+      name: Encender los dispositivos?
+      default: true
+      selector:
+        boolean: {}
+    turn_off_boolean:
+      name: Apagar los dispositivos?
+      default: true
+      selector:
+        boolean: {}
+    shelly_temperature_sensor:
+      name: Sensor de temperatura del dispositivo Shelly
+      description: "Seleccione el sensor de temperatura del dispositivo Shelly."
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+    max_temperature:
+      name: Temperatura máxima permitida
+      description: "Define la temperatura máxima en grados Celsius antes de apagar el dispositivo."
+      default: 60
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 1
+          unit_of_measurement: °C
+    min_temperature:
+      name: Temperatura mínima para volver a encender
+      description: "Define la temperatura mínima para permitir que el dispositivo vuelva a encenderse."
+      default: 40
+      selector:
+        number:
+          min: 20
+          max: 50
+          step: 1
+          unit_of_measurement: °C
+  trigger:
+  - platform: state
+    entity_id: !input pvpc_sensor
+  variables:
+    pvpc_sensor: !input pvpc_sensor
+    pvpc_position: '{{ state_attr(pvpc_sensor, "price_position") }}'
+    hours: !input hours
+    tariff: !input tariff
+    shelly_temperature_sensor: !input shelly_temperature_sensor
+    max_temperature: !input max_temperature
+    min_temperature: !input min_temperature
+    current_temperature: '{{ states(shelly_temperature_sensor) | float }}'
+  condition:
+    # Check if the temperature is within limits
+    - condition: numeric_state
+      entity_id: !input shelly_temperature_sensor
+      below: !input max_temperature
+  action:
+    - if: '{{ when_to_turn_on[now().hour] == 1 }}'
+      then:
+      - if: '{{ current_temperature < max_temperature }}'
+        then:
+        - if: '{{ true }}'
+          then: !input action_on_before
+        - if: '{{ turn_on_boolean }}'
+          then:
+          - service: homeassistant.turn_on
+            target: !input device
+        - if: '{{ true }}'
+          then: !input action_on_after
+      else:
+      - if: '{{ current_temperature < min_temperature }}'
+        then:
+        - service: homeassistant.turn_off
+          target: !input device
+        - if: '{{ true }}'
+          then: !input action_off_before
+        - if: '{{ turn_off_boolean }}'
+          then:
+          - service: homeassistant.turn_off
+            target: !input device
+        - if: '{{ true }}'
+          then: !input action_off_after
+mode: queued
+max: 20
+max_exceeded: warning
