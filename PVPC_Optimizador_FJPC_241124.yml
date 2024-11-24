@@ -1,0 +1,111 @@
+blueprint:
+  author: fjporras
+  name: PVPC Optimizer con Control de Temperatura y Horas Baratas Integrado
+  description: 'Este blueprint enciende un dispositivo cuando los precios de electricidad son bajos 
+    durante las horas más baratas seleccionadas, y lo apaga si la temperatura del sensor supera un valor 
+    definido por el usuario.'
+  domain: automation
+  
+  input:
+    pvpc_sensor:
+      name: Sensor de precios PVPC
+      description: Selecciona el sensor que muestra los precios del PVPC
+      selector:
+        entity:
+          domain: sensor
+    target_device:
+      name: Dispositivo a encender
+      description: El dispositivo que se encenderá durante las horas más baratas
+      selector:
+        target:
+          entity:
+            domain: switch
+    temp_sensor:
+      name: Sensor de temperatura
+      description: Selecciona el sensor que medirá la temperatura
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+    max_temp:
+      name: Temperatura máxima permitida
+      description: El valor máximo de temperatura antes de que el dispositivo se apague
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.5
+    min_price:
+      name: Precio máximo del PVPC
+      description: El precio máximo del PVPC para encender el dispositivo
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    cheap_hours:
+      name: Número de horas baratas
+      description: El número de horas más baratas que se tendrán en cuenta para encender el dispositivo
+      selector:
+        number:
+          min: 1
+          max: 24
+          step: 1
+    max_duration:
+      name: Duración máxima del encendido (en minutos)
+      description: El tiempo máximo que el dispositivo permanecerá encendido
+      selector:
+        number:
+          min: 1
+          max: 120
+          step: 1
+    
+    trigger:
+      - platform: time
+        at: "00:00:00"
+        description: "Se activará a medianoche para analizar las horas más baratas"
+    
+    action:
+      # Actualizar el sensor de precios PVPC
+      - service: homeassistant.update_entity
+        entity_id: !input pvpc_sensor
+    
+      # Filtrar y seleccionar las horas más baratas
+      - variables:
+          all_prices: "{{ state_attr(input.pvpc_sensor, 'all_prices') }}"
+          sorted_hours: "{{ all_prices | sort(attribute='price')[:cheap_hours] }}"
+    
+      - repeat:
+          count: "{{ cheap_hours }}"
+          sequence:
+            # Obtener la hora más barata
+            - variables:
+                current_hour: "{{ sorted_hours[repeat.index - 1].hour }}"
+                current_price: "{{ sorted_hours[repeat.index - 1].price }}"
+    
+            # Verificar si el precio actual es menor que el precio máximo
+            - condition: template
+              value_template: "{{ current_price <= min_price }}"
+    
+            # Encender el dispositivo durante la hora seleccionada
+            - service: switch.turn_on
+              target: !input target_device
+    
+            # Esperar la duración de la hora antes de verificar la siguiente
+            - delay:
+                hours: 1
+    
+            # Apagar el dispositivo si la temperatura excede el valor máximo
+            - wait_for_trigger:
+                - platform: numeric_state
+                  entity_id: !input temp_sensor
+                  above: !input max_temp
+            - service: switch.turn_off
+              target: !input target_device
+              data:
+                message: "Dispositivo apagado porque la temperatura excedió el límite."
+            - delay: "{{ (input max_duration * 60) | int }}"
+            - service: switch.turn_off
+              target: !input target_device
+              data:
+                message: "Dispositivo apagado tras el tiempo máximo de encendido."
